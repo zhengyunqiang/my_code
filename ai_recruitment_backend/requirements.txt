@@ -1,0 +1,7 @@
+langgraph
+langchain
+langchain-community
+dashscope
+pydantic
+python-dotenv
+
