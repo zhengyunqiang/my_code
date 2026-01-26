@@ -1,6 +1,6 @@
 # Actor（单智能体）网络设计与实现细节
 
-本文描述与 PRD 一致的单智能体 Actor：输入为共享 GAT 输出的节点嵌入，输出针对每个子信道的离散用户选择与连续功率分配；并提供 PPO 所需的联合对数概率与熵项计算口径。
+本文描述单智能体 Actor（策略网络）：输入为共享 GAT 输出的节点嵌入，输出针对每个子信道的离散用户选择与连续功率分配；并提供 PPO 所需的联合对数概率与熵项计算口径。
 
 ---
 
@@ -18,7 +18,7 @@
   $$\log\pi_{\theta_i^{\mathrm{old}}}\!\left(a_t^{(i)}\mid s_t\right)$$
 - **更新阶段（update）**：在新策略下复算联合对数概率  
   $$\log\pi_{\theta_i}\!\left(a_t^{(i)}\mid s_t\right)$$  
-  与熵项 \mathcal{H}
+  与熵项 $\mathcal{H}$
 
 ### 1.2 约束
 - **离散动作**：  
@@ -77,17 +77,17 @@ $$d_{\mathrm{param}}^{(i)} = MK + 2M = M(K+2)$$
 采用“共享 trunk + 三个 head”的结构。
 
 ### 4.1 Trunk（特征提取）
-Trunk 将 $$h_i$$ 映射到隐表示 $$t$$：
+Trunk 将 $h_i$ 映射到隐表示 $t$：
 $$t=f_{\mathrm{trunk}}(h_i),\qquad t\in\mathbb{R}^{B\times D_a}$$
 
-其中 $$D_a$$ 为 trunk 输出维度。
+其中 $D_a$ 为 trunk 输出维度。
 
 ### 4.2 离散 Head（logits）
 输出并 reshape：
 $$\mathrm{vec}(L)=W_L t+b_L,\qquad \mathrm{vec}(L)\in\mathbb{R}^{B\times (MK)}$$
 $$L\in\mathbb{R}^{B\times M\times K}$$
 
-### 4.3 连续 Head（$$\mu,\sigma$$）
+### 4.3 连续 Head（$\mu,\sigma$）
 $$\mu=W_\mu t+b_\mu,\qquad \mu\in\mathbb{R}^{B\times M}$$
 $$\sigma=\mathrm{softplus}(W_\sigma t+b_\sigma)+\sigma_{\min},\qquad \sigma_{\min}>0$$
 
@@ -96,13 +96,13 @@ $$\sigma=\mathrm{softplus}(W_\sigma t+b_\sigma)+\sigma_{\min},\qquad \sigma_{\mi
 ## 5. 分布定义与采样（Rollout 阶段）
 
 ### 5.1 离散动作（Categorical）
-第 $$j$$ 条子信道：
-$$u_{t,j}^{(i)}\sim \mathrm{Categorical}\!\left(\mathrm{softmax}\!\left(L_{t,j}^{(i)}\right)\right)$$
+第 $j$ 条子信道：
+$u_{t,j}^{(i)}\sim \mathrm{Categorical}\!\left(\mathrm{softmax}\!\left(L_{t,j}^{(i)}\right)\right)$
 
 离散对数概率（每头）：
 $$\log\pi_{\theta_i}\!\left(u_{t,j}^{(i)}\mid s_t\right)$$
 
-离散部分联合对数概率（对 $$M$$ 求和）：
+离散部分联合对数概率（对 $M$ 求和）：
 $$\log\pi_{\theta_i}^{U}\!\left(a_t^{(i)}\mid s_t\right)=\sum_{j=1}^{M}\log\pi_{\theta_i}\!\left(u_{t,j}^{(i)}\mid s_t\right)$$
 
 ### 5.2 连续功率（Sigmoid-Squashed Gaussian）
@@ -119,17 +119,14 @@ p_{t,j}^{(i)}=P_{\max}\tilde p_{t,j}^{(i)}\in(0,P_{\max})$$
 
 ### 6.1 总体形式
 单智能体联合对数概率：
-$$\log \pi_{\theta_i}\!\left(a_t^{(i)}\mid s_t\right)
-=
-\sum_{j=1}^{M}\left(
-\log \pi_{\theta_i}\!\left(u_{t,j}^{(i)}\mid s_t\right)
-+
-\log \pi_{\theta_i}\!\left(p_{t,j}^{(i)}\mid s_t\right)
-\right)$$
+$\log \pi_{\theta_i}\!\left(a_t^{(i)}\mid s_t\right) = 
+\sum_{j=1}^{M}
+\left(\log \pi_{\theta_i}\!\left(u_{t,j}^{(i)}\mid s_t\right)+ 
+\log \pi_{\theta_i}\!\left(p_{t,j}^{(i)}\mid s_t\right)\right)$
 
 ### 6.2 连续部分（change-of-variables + Jacobian）
 令：
-$$\tilde p=\frac{p}{P_{\max}}\in(0,1),\qquad
+$$\tilde p=\frac{p}{P_{\max}}\in(0,1), 
 z=\operatorname{logit}(\tilde p)=\ln\frac{\tilde p}{1-\tilde p}$$
 
 则单维连续对数概率：
@@ -139,7 +136,7 @@ $$\log \pi_{\theta_i}(p\mid s)
 -\log P_{\max}
 -\log\!\big(\tilde p(1-\tilde p)\big)$$
 
-对 $$M$$ 条子信道求和得到连续部分联合对数概率：
+对 $M$ 条子信道求和得到连续部分联合对数概率：
 $$\log\pi_{\theta_i}^{P}\!\left(a_t^{(i)}\mid s_t\right)=\sum_{j=1}^{M}\log \pi_{\theta_i}\!\left(p_{t,j}^{(i)}\mid s_t\right)$$
 
 ---
@@ -147,8 +144,7 @@ $$\log\pi_{\theta_i}^{P}\!\left(a_t^{(i)}\mid s_t\right)=\sum_{j=1}^{M}\log \pi_
 ## 7. 熵项（Entropy Bonus）
 
 ### 7.1 离散熵（可精确计算）
-$$\mathcal{H}_U
-=
+$$\mathcal{H}_U =
 \sum_{j=1}^{M}
 \mathcal{H}\!\left(\mathrm{Categorical}\!\left(\mathrm{softmax}\!\left(L_{t,j}^{(i)}\right)\right)\right)$$
 
@@ -184,15 +180,15 @@ $$L\in\mathbb{R}^{B\times M\times K},\qquad
 
 ### 8.3 `evaluate(h_i,U,P)`（PPO 复算）
 返回：
-- 新策略下联合对数概率：$$\log\pi_{\theta_i}(a\mid s)\in\mathbb{R}^{B}$$
-- 熵：$$\mathcal{H}\in\mathbb{R}^{B}$$
-- （可选）离散/连续分量：$$\log\pi^{U}$$ 与 $$\log\pi^{P}$$ 的求和结果
+- 新策略下联合对数概率：$\log\pi_{\theta_i}(a\mid s)\in\mathbb{R}^{B}$
+- 熵：$\mathcal{H}\in\mathbb{R}^{B}$
+- （可选）离散/连续分量：$\log\pi^{U}$ 与 $\log\pi^{P}$ 的求和结果
 
 ---
 
-## 9. 数值稳定与实现细节（必须项）
+## 9. 数值稳定与实现细节
 
-### 9.1 概率边界 Clamp（避免 $$\log(0)$$）
+### 9.1 概率边界 Clamp（避免 $\log(0)$）
 对归一化功率：
 $$\tilde p=\frac{p}{P_{\max}}$$
 
@@ -203,7 +199,7 @@ $$\tilde p\leftarrow \mathrm{clamp}(\tilde p,\varepsilon,1-\varepsilon),\qquad \
 $$\sigma \leftarrow \max(\sigma,\sigma_{\min}),\qquad \sigma_{\min}=10^{-3}\ \text{（推荐）}$$
 
 ### 9.3 log-prob 聚合口径（用于 PPO ratio）
-离散与连续的 `log_prob` 通常为形状 $$B\times M$$，必须在子信道维度求和得到 $$B$$：
+离散与连续的 `log_prob` 通常为形状 $B\times M$，必须在子信道维度求和得到 $B$：
 $$\log\pi(a\mid s)=\sum_{j=1}^{M}\big(\log\pi(u_j\mid s)+\log\pi(p_j\mid s)\big)\in\mathbb{R}^{B}$$
 
 ---
