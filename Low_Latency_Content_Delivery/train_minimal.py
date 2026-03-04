@@ -122,7 +122,7 @@ def main() -> None:
         d_h=D_h,
         num_layers=2,
         num_heads=4,
-        dropout=0.0,
+        dropout_attn=0.0,
         use_edge_weight=False,
         use_residual=False,
         use_layernorm=False,

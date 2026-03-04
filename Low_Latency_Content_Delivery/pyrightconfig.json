@@ -1,0 +1,19 @@
+{
+  "include": [
+    "*.py",
+    "buffers",
+    "environments",
+    "models",
+    "trainers",
+    "utils"
+  ],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": [
+        "."
+      ]
+    }
+  ],
+  "typeCheckingMode": "basic"
+}

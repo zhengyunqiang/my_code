@@ -1,4 +1,11 @@
 # models/actor.py
+"""
+Actor networks for heterogeneous multi-agent systems.
+
+Supports two types of actors:
+  1. TelecomHybridActor - Mixed action space (discrete + continuous)
+  2. SBSActor - Pure continuous action space (bandwidth allocation)
+"""
 from __future__ import annotations
 
 import math
@@ -10,6 +17,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical, Normal
 
+
+# ============================================================================
+# Type Aliases and Utility Functions
+# ============================================================================
 
 InitMode = Literal["xavier", "orthogonal"]
 ActName = Literal["relu", "elu", "gelu", "tanh", "silu"]
@@ -48,6 +59,10 @@ def logit(x: torch.Tensor) -> torch.Tensor:
     return torch.log(x) - torch.log1p(-x)
 
 
+# ============================================================================
+# TelecomHybridActor - Mixed Action Space (Discrete + Continuous)
+# ============================================================================
+
 @dataclass(frozen=True)
 class ActorOutput:
     """
@@ -69,7 +84,7 @@ class ActorOutput:
 
 class TelecomHybridActor(nn.Module):
     """
-    Hybrid Multi-Head Actor (Single Agent)
+    Hybrid Multi-Head Actor (Single Agent) - Mixed Action Space
 
     Input
     -----
@@ -186,21 +201,14 @@ class TelecomHybridActor(nn.Module):
         return ActorOutput(logits=logits, mu=mu, std=std)
 
     def _discrete_dist(self, logits: torch.Tensor) -> Categorical:
-        # Categorical supports batch shape [B,M]
         return Categorical(logits=logits)
 
     def _continuous_dist(self, mu: torch.Tensor, std: torch.Tensor) -> Normal:
-        # Normal supports batch shape [B,M]
         return Normal(mu, std)
 
     def _power_from_z(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Map pre-squash z -> (p_norm, p) with sigmoid + scaling.
-
-        Returns
-        -------
-        p_norm : (0,1), shape [B,M]
-        p      : (0,Pmax), shape [B,M]
         """
         p_norm = torch.sigmoid(z)
         p = p_norm * self.Pmax
@@ -209,11 +217,6 @@ class TelecomHybridActor(nn.Module):
     def _log_prob_power_from_z(
         self, z: torch.Tensor, p_norm: torch.Tensor, dist_z: Normal
     ) -> torch.Tensor:
-        """
-        Given sampled z and corresponding p_norm = sigmoid(z), compute log pi(p|s)
-        using change-of-variables:
-          log pi(p|s) = log N(z;mu,std) - log Pmax - log(p_norm*(1-p_norm))
-        """
         logp_z = dist_z.log_prob(z)  # [B,M]
         log_det = -math.log(self.Pmax) - torch.log(p_norm * (1.0 - p_norm) + self.eps)
         return logp_z + log_det  # [B,M]
@@ -221,18 +224,6 @@ class TelecomHybridActor(nn.Module):
     def _log_prob_power_from_p(
         self, power: torch.Tensor, mu: torch.Tensor, std: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Given power p in (0,Pmax), compute:
-          p_norm = clamp(p/Pmax, eps, 1-eps)
-          z = logit(p_norm)
-          log pi(p|s) = log N(z;mu,std) - log Pmax - log(p_norm*(1-p_norm))
-
-        Returns
-        -------
-        logp_p : [B,M]
-        p_norm : [B,M]
-        z      : [B,M]
-        """
         p_norm = (power / self.Pmax).clamp(self.eps, 1.0 - self.eps)
         z = logit(p_norm)
         dist_z = Normal(mu, std)
@@ -271,9 +262,7 @@ class TelecomHybridActor(nn.Module):
         # Joint log-prob summed over subchannels
         logp = (logp_u + logp_p).sum(dim=-1)    # [B]
 
-        # Entropy bonus:
-        #   - Discrete entropy is exact
-        #   - Continuous uses pre-squash Normal entropy (common stable approximation)
+        # Entropy bonus
         ent_p = dist_z.entropy()                # [B,M]
         entropy = (ent_u + ent_p).sum(dim=-1)   # [B]
 
@@ -287,20 +276,6 @@ class TelecomHybridActor(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """
         Re-evaluate log-prob and entropy for PPO update under current policy.
-
-        Parameters
-        ----------
-        h : [B, D_h]
-        users : [B, M]  (int indices)
-        power : [B, M]  (float in (0,Pmax))  - stored rollout action
-
-        Returns
-        -------
-        dict with keys:
-          logp_new   : [B]
-          entropy    : [B]
-          logp_u_sum : [B] (optional decomposition)
-          logp_p_sum : [B] (optional decomposition)
         """
         if users.ndim != 2:
             raise ValueError(f"users must be rank-2 [B,M], got shape {tuple(users.shape)}")
@@ -337,4 +312,220 @@ class TelecomHybridActor(nn.Module):
             "entropy": entropy,
             "logp_u_sum": logp_u.sum(dim=-1),
             "logp_p_sum": logp_p.sum(dim=-1),
+        }
+
+
+# ============================================================================
+# SBSActor - Pure Continuous Action Space (Bandwidth Allocation)
+# ============================================================================
+
+@dataclass(frozen=True)
+class SBSActorOutput:
+    """
+    SBS Actor distribution parameters.
+
+    Attributes
+    ----------
+    mu : torch.Tensor
+        Bandwidth allocation mean for K FAPs, shape [B, K].
+    std : torch.Tensor
+        Bandwidth allocation std (>0) for K FAPs, shape [B, K].
+    """
+    mu: torch.Tensor      # [B, K]
+    std: torch.Tensor     # [B, K] > 0
+
+
+class SBSActor(nn.Module):
+    """
+    SBS (Small Cell Base Station) Actor for Continuous Bandwidth Allocation
+
+    Input
+    -----
+    h : [B, D_h]  (node embedding from shared GAT for one SBS agent)
+
+    Outputs (distribution parameters)
+    -------------------------------
+    mu  : [B, K]   (Normal mean for bandwidth allocation to K FAPs)
+    std : [B, K]   (Normal std for bandwidth allocation to K FAPs)
+
+    Sampling (Sigmoid-squashed Gaussian for bounded [0, B_max] output)
+    --------
+      z_k ~ Normal(mu_k, std_k)  for k = 1..K
+      b_norm_k = sigmoid(z_k) in (0,1)
+      b_k = B_max * b_norm_k in (0, B_max)
+
+    Joint log-prob (PPO convention)
+    -------------------------------
+      log pi(a|s) = sum_{k=1..K} log pi(b_k|s)
+
+    Continuous log pi(b|s) uses change-of-variables:
+      b_norm = b / B_max
+      z = logit(b_norm)
+      log pi(b|s) = log N(z; mu, std) - log B_max - log(b_norm*(1-b_norm))
+    """
+
+    def __init__(
+        self,
+        input_dim: int,                 # D_h
+        num_fap: int,                   # K - number of FAPs
+        max_bandwidth: float,           # B_max - maximum bandwidth
+        trunk_layers: Sequence[int] = (256, 256),
+        activation: ActName = "relu",
+        dropout: float = 0.0,
+        min_std: float = 1e-3,
+        eps: float = 1e-6,
+        init_mode: InitMode = "xavier",
+    ) -> None:
+        super().__init__()
+        if input_dim <= 0:
+            raise ValueError(f"input_dim must be positive, got {input_dim}")
+        if num_fap <= 0:
+            raise ValueError(f"num_fap (K) must be positive, got {num_fap}")
+        if max_bandwidth <= 0:
+            raise ValueError(f"max_bandwidth (B_max) must be > 0, got {max_bandwidth}")
+        if any(h <= 0 for h in trunk_layers):
+            raise ValueError(f"trunk_layers must be positive ints, got {trunk_layers}")
+        if not (0.0 <= dropout < 1.0):
+            raise ValueError(f"dropout must be in [0,1), got {dropout}")
+        if min_std <= 0:
+            raise ValueError(f"min_std must be > 0, got {min_std}")
+        if eps <= 0:
+            raise ValueError(f"eps must be > 0, got {eps}")
+
+        self.D_h = int(input_dim)
+        self.K = int(num_fap)
+        self.Bmax = float(max_bandwidth)
+        self.min_std = float(min_std)
+        self.eps = float(eps)
+
+        act = _get_activation(activation)
+
+        # Trunk: MLP
+        dims: Tuple[int, ...] = (self.D_h,) + tuple(int(x) for x in trunk_layers)
+        layers = []
+        for in_dim, out_dim in zip(dims[:-1], dims[1:]):
+            layers.append(nn.Linear(in_dim, out_dim))
+            layers.append(act)
+            if dropout > 0.0:
+                layers.append(nn.Dropout(p=float(dropout)))
+        self.trunk = nn.Sequential(*layers)
+        trunk_out = dims[-1]
+
+        # Heads: 2K output neurons -> K mu + K log_std
+        self.mu_head = nn.Linear(trunk_out, self.K)
+        self.log_std_head = nn.Linear(trunk_out, self.K)
+
+        # Init
+        self.apply(lambda m: _init_linear_(m, mode=init_mode))
+
+    def forward(self, h: torch.Tensor) -> SBSActorOutput:
+        """
+        Parameters
+        ----------
+        h : torch.Tensor
+            Node embedding, shape [B, D_h].
+
+        Returns
+        -------
+        SBSActorOutput
+            mu [B,K], std [B,K] (>0)
+        """
+        if h.ndim != 2:
+            raise ValueError(f"h must be rank-2 [B,D_h], got shape {tuple(h.shape)}")
+        B, Dh = h.shape
+        if Dh != self.D_h:
+            raise ValueError(f"Expected h last dim D_h={self.D_h}, got {Dh}")
+
+        t = self.trunk(h)  # [B, D_a]
+        mu = self.mu_head(t)                                  # [B,K]
+        log_std = self.log_std_head(t)                        # [B,K]
+        std = F.softplus(log_std) + self.min_std              # [B,K] > 0
+        return SBSActorOutput(mu=mu, std=std)
+
+    def _continuous_dist(self, mu: torch.Tensor, std: torch.Tensor) -> Normal:
+        return Normal(mu, std)
+
+    def _bandwidth_from_z(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Map pre-squash z -> (b_norm, b) with sigmoid + scaling.
+        """
+        b_norm = torch.sigmoid(z)
+        b = b_norm * self.Bmax
+        return b_norm, b
+
+    def _log_prob_bandwidth_from_z(
+        self, z: torch.Tensor, b_norm: torch.Tensor, dist_z: Normal
+    ) -> torch.Tensor:
+        logp_z = dist_z.log_prob(z)  # [B,K]
+        log_det = -math.log(self.Bmax) - torch.log(b_norm * (1.0 - b_norm) + self.eps)
+        return logp_z + log_det  # [B,K]
+
+    def _log_prob_bandwidth_from_b(
+        self, bandwidth: torch.Tensor, mu: torch.Tensor, std: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        b_norm = (bandwidth / self.Bmax).clamp(self.eps, 1.0 - self.eps)
+        z = logit(b_norm)
+        dist_z = Normal(mu, std)
+        logp_z = dist_z.log_prob(z)
+        log_det = -math.log(self.Bmax) - torch.log(b_norm * (1.0 - b_norm) + self.eps)
+        logp_b = logp_z + log_det
+        return logp_b, b_norm, z
+
+    @torch.no_grad()
+    def get_action(self, h: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Sample bandwidth allocation actions for rollout.
+
+        Returns
+        -------
+        dict with keys:
+          bandwidth : [B,K] float  (allocated bandwidth in (0, B_max))
+          logp      : [B]   float  (joint log-prob over K FAPs)
+          entropy   : [B]   float  (entropy summed over K FAPs)
+        """
+        out = self.forward(h)
+
+        # Continuous: bandwidth via sigmoid-squashed Gaussian
+        dist_z = self._continuous_dist(out.mu, out.std)
+        z = dist_z.rsample()                    # [B,K]
+        b_norm, bandwidth = self._bandwidth_from_z(z)  # [B,K], [B,K]
+        logp_b = self._log_prob_bandwidth_from_z(z, b_norm, dist_z)  # [B,K]
+
+        # Joint log-prob summed over FAPs
+        logp = logp_b.sum(dim=-1)               # [B]
+
+        # Entropy: pre-squash Normal entropy (stable approximation)
+        entropy = dist_z.entropy().sum(dim=-1)   # [B]
+
+        return {"bandwidth": bandwidth, "logp": logp, "entropy": entropy}
+
+    def evaluate(
+        self,
+        h: torch.Tensor,
+        bandwidth: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Re-evaluate log-prob and entropy for PPO update under current policy.
+        """
+        if bandwidth.ndim != 2:
+            raise ValueError(f"bandwidth must be rank-2 [B,K], got shape {tuple(bandwidth.shape)}")
+
+        out = self.forward(h)
+        B = out.mu.shape[0]
+
+        if bandwidth.shape[0] != B or bandwidth.shape[1] != self.K:
+            raise ValueError(
+                f"bandwidth shape mismatch: expected [B={B}, K={self.K}], got {tuple(bandwidth.shape)}"
+            )
+
+        # Continuous (invert bandwidth -> z)
+        logp_b, _, _ = self._log_prob_bandwidth_from_b(bandwidth, out.mu, out.std)  # [B,K]
+        dist_z = self._continuous_dist(out.mu, out.std)
+        entropy = dist_z.entropy().sum(dim=-1)  # [B]
+
+        logp_new = logp_b.sum(dim=-1)  # [B]
+
+        return {
+            "logp_new": logp_new,
+            "entropy": entropy,
         }

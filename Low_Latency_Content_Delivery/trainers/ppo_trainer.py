@@ -2,11 +2,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import sys
+
+# Ensure sibling packages (buffers/models) are importable even when this file
+# is executed from non-project-root working directories.
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from buffers.rollout_buffer import RolloutBufferEpisode
 
