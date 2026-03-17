@@ -309,13 +309,13 @@ Producer                           Kafka                           Consumer
      │ send(message)                 │                               │
      ├──────────────────────────────▶│                               │
      │                               │                               │
-     │    返回 Future                │                               │
+     │    返回 Future                │                                │
      │◀──────────────────────────────┤                               │
      │                               │                               │
      │    callback.on_success()      │                               │
      │    (partition=0, offset=5)    │                               │
      │                               │                               │
-     │                               │    poll() 拉取                │
+     │                               │    poll() 拉取                 │
      │                               ├──────────────────────────────▶│
      │                               │                               │
      │                               │    message                    │

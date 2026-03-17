@@ -253,7 +253,7 @@ class KafkaProducerAdvanced:
         try:
             future = self.producer.send(**send_kwargs)
 
-            # 添加回调
+            # 添加回调，这里的回调机制本质上是为异步过程设置了一个监听器
             if callback:
                 cb = ProducerCallback(value, self.metrics, logger)
                 future.add_callback(cb.on_success)
