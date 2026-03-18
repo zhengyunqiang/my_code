@@ -259,7 +259,7 @@ class KafkaProducerAdvanced:
                 future.add_callback(cb.on_success)
                 future.add_errback(cb.on_error)
 
-            # 同步发送
+            # 同步发送，这里是将异步操作强制的转化为同步操作
             if sync:
                 return future.get(timeout=10)
 
@@ -483,7 +483,7 @@ if __name__ == '__main__':
     # 运行示例
     try:
         example_basic_send()
-        # example_sync_send()
+        example_sync_send()
         # example_batch_send()
         # example_with_headers()
         # example_custom_partition()

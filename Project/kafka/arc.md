@@ -309,7 +309,7 @@ Producer                           Kafka                           Consumer
      │ send(message)                 │                               │
      ├──────────────────────────────▶│                               │
      │                               │                               │
-     │    返回 Future                │                                │
+     │    返回 Future                 │                               │
      │◀──────────────────────────────┤                               │
      │                               │                               │
      │    callback.on_success()      │                               │

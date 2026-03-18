@@ -1,0 +1,59 @@
+# MCP System Base Requirements
+# 核心依赖
+
+# MCP SDK
+mcp>=0.1.0
+
+# Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Database
+sqlalchemy>=2.0.23
+asyncpg>=0.29.0
+aiosqlite>=0.19.0
+alembic>=1.13.0
+
+# Redis
+redis>=5.0.1
+hiredis>=2.2.3
+
+# Authentication
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.1
+
+# Data Validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Logging
+loguru>=0.7.2
+
+# Message Queue
+confluent-kafka>=2.3.0
+
+# HTTP Client
+httpx>=0.25.2
+aiohttp>=3.9.1
+
+# AI/LLM (使用 OpenAI SDK 调用千问 API)
+openai>=1.0.0
+
+# Utilities
+python-dateutil>=2.8.2
+pytz>=2023.3
+tenacity>=8.2.3
+
+# Security
+cryptography>=41.0.7
+
+# JSON Schema
+jsonschema>=4.20.0
+
+# Async
+anyio>=4.0.0
+
+# Environment
+python-dotenv>=1.0.0
