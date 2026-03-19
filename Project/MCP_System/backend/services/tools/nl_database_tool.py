@@ -481,11 +481,15 @@ class NLDatabaseExecutor:
             return await self._execute_insert(intent, dry_run)
         elif intent.operation == "select":
             return await self._execute_select(intent)
+        elif intent.operation == "update":
+            return await self._execute_update(intent, dry_run)
+        elif intent.operation == "delete":
+            return await self._execute_delete(intent, dry_run)
         else:
             raise ToolExecutionError(
                 "unsupported_operation",
                 f"Operation '{intent.operation}' is not yet supported. "
-                "Currently supported: insert, select"
+                "Currently supported: insert, select, update, delete"
             )
 
     async def _execute_insert(
@@ -603,6 +607,148 @@ class NLDatabaseExecutor:
                 f"Failed to query data: {str(e)}"
             )
 
+    async def _execute_update(self, intent: ParsedIntent, dry_run: bool) -> Dict[str, Any]:
+        """执行更新操作"""
+        schema = await self.schema_reader.get_table_schema(intent.table_name)
+        if not schema:
+            raise ToolExecutionError(
+                "table_not_found",
+                f"Table '{intent.table_name}' not found"
+            )
+
+        # 检查是否有更新数据
+        if not intent.data:
+            raise ToolExecutionError(
+                "no_update_data",
+                "Update operation requires fields to update. "
+                "Example: '把 id 为 1000 的用户的 display_name 改为 张三'"
+            )
+
+        # 构建更新 SQL
+        set_clauses = []
+        for key, value in intent.data.items():
+            if isinstance(value, str):
+                value = value.replace("'", "''")
+                set_clauses.append(f"{key} = '{value}'")
+            elif isinstance(value, bool):
+                set_clauses.append(f"{key} = {('TRUE' if value else 'FALSE')}")
+            elif value is None:
+                set_clauses.append(f"{key} = NULL")
+            else:
+                set_clauses.append(f"{key} = {value}")
+
+        # 构建 WHERE 条件
+        where_clauses = []
+        if intent.conditions:
+            for key, value in intent.conditions.items():
+                if isinstance(value, str):
+                    value = value.replace("'", "''")
+                    where_clauses.append(f"{key} = '{value}'")
+                elif isinstance(value, bool):
+                    where_clauses.append(f"{key} = {('TRUE' if value else 'FALSE')}")
+                elif value is None:
+                    where_clauses.append(f"{key} IS NULL")
+                else:
+                    where_clauses.append(f"{key} = {value}")
+
+        sql = f"UPDATE {intent.table_name} SET {', '.join(set_clauses)}"
+        if where_clauses:
+            sql += f" WHERE {' AND '.join(where_clauses)}"
+        sql += ";"
+
+        if dry_run:
+            return {
+                "operation": "update",
+                "table": intent.table_name,
+                "dry_run": True,
+                "generated_sql": sql,
+                "update_data": intent.data,
+                "conditions": intent.conditions,
+            }
+
+        try:
+            async with async_session_maker() as session:
+                result = await session.execute(text(sql))
+                affected_rows = result.rowcount
+                await session.commit()
+
+                return {
+                    "operation": "update",
+                    "table": intent.table_name,
+                    "affected_rows": affected_rows,
+                    "success": True,
+                    "sql": sql,
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to execute update: {e}")
+            raise ToolExecutionError(
+                "update_failed",
+                f"Failed to update data: {str(e)}"
+            )
+
+    async def _execute_delete(self, intent: ParsedIntent, dry_run: bool) -> Dict[str, Any]:
+        """执行删除操作"""
+        schema = await self.schema_reader.get_table_schema(intent.table_name)
+        if not schema:
+            raise ToolExecutionError(
+                "table_not_found",
+                f"Table '{intent.table_name}' not found"
+            )
+
+        # 检查是否有删除条件（安全措施）
+        if not intent.conditions:
+            raise ToolExecutionError(
+                "no_delete_conditions",
+                "Delete operation requires WHERE conditions for safety. "
+                "Example: '删除 id 为 1000 的用户'"
+            )
+
+        # 构建 WHERE 条件
+        where_clauses = []
+        for key, value in intent.conditions.items():
+            if isinstance(value, str):
+                value = value.replace("'", "''")
+                where_clauses.append(f"{key} = '{value}'")
+            elif isinstance(value, bool):
+                where_clauses.append(f"{key} = {('TRUE' if value else 'FALSE')}")
+            elif value is None:
+                where_clauses.append(f"{key} IS NULL")
+            else:
+                where_clauses.append(f"{key} = {value}")
+
+        sql = f"DELETE FROM {intent.table_name} WHERE {' AND '.join(where_clauses)};"
+
+        if dry_run:
+            return {
+                "operation": "delete",
+                "table": intent.table_name,
+                "dry_run": True,
+                "generated_sql": sql,
+                "conditions": intent.conditions,
+            }
+
+        try:
+            async with async_session_maker() as session:
+                result = await session.execute(text(sql))
+                affected_rows = result.rowcount
+                await session.commit()
+
+                return {
+                    "operation": "delete",
+                    "table": intent.table_name,
+                    "affected_rows": affected_rows,
+                    "success": True,
+                    "sql": sql,
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to execute delete: {e}")
+            raise ToolExecutionError(
+                "delete_failed",
+                f"Failed to delete data: {str(e)}"
+            )
+
 
 # ========================================
 # 全局执行器实例
@@ -620,14 +766,20 @@ nl_db_executor = NLDatabaseExecutor()
     使用自然语言执行数据库操作。
 
     支持的操作：
-    - 插入测试数据：例如"在users表中添加3条测试数据"、"给products表插入10条数据"
+    - 插入数据：例如"在users表中添加3条测试数据"、"给products表插入10条数据"
     - 查询数据：例如"查看users表的数据"、"查询orders表前5条记录"
+    - 更新数据：例如"把id为1000的用户的display_name改为张三"、"将username是test的用户状态设为inactive"
+    - 删除数据：例如"删除id为1000的用户"、"移除status为deleted的所有记录"
 
     系统会自动：
     1. 解析你的自然语言意图（使用千问 AI）
     2. 读取目标表结构
-    3. 根据字段类型生成合适的测试数据
+    3. 根据字段类型生成合适的测试数据（仅插入操作）
     4. 执行数据库操作
+
+    安全说明：
+    - 删除操作必须指定 WHERE 条件
+    - 建议先使用 dry_run=true 预览操作
 
     注意：操作将使用当前用户的数据库权限。
     """,

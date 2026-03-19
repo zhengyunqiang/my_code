@@ -189,7 +189,13 @@ NL_DATABASE_PARSE_USER = PromptTemplate(
 
 用户输入：{user_input}
 
-请解析这个数据库操作意图，返回 JSON 格式。""",
+请解析这个数据库操作意图，返回 JSON 格式。
+
+**解析规则**：
+- **update 操作**：需要提取要更新的字段和新值（data），以及 WHERE 条件（conditions）
+- **delete 操作**：需要提取 WHERE 条件（conditions）
+- **conditions 示例**：{{"id": 1000}} 或 {{"username": "test_user"}}
+- **data 示例**（update）：{{"display_name": "新名称", "status": "active"}}""",
     variables=[
         PromptVariable(
             name="tables",
@@ -205,7 +211,7 @@ NL_DATABASE_PARSE_USER = PromptTemplate(
         ),
     ],
     language=PromptLanguage.ZH_CN,
-    version="1.0.0",
+    version="1.1.0",
 )
 
 # SQL 生成提示词
