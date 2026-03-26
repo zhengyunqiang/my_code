@@ -21,7 +21,7 @@ class StdioTransport:
     通过标准输入输出与 Claude Desktop 通信
     实现 MCP 协议的 stdio 传输方式
     """
-
+    # 初始化传输层实例，设置初始状态
     def __init__(self):
         self.handler: Optional[JSONRPCHandler] = None
         self._running = False
